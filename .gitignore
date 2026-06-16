@@ -16,6 +16,7 @@ bin/
 
 # Configs with user data
 vpn_keys.json
+subscriptions.json
 
 # Logs & errors
 *.log
