@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Binary dependencies (users download on first run)
+bin/
+
+# PyArmor
+.pyarmor/
+
+# Configs with user data
+vpn_keys.json
+
+# Logs & errors
+*.log
+fatal_err.txt
+crash.log
+
+# Test/debug files
+test_*.py
+probe_*.py
+build_obfuscated.py
