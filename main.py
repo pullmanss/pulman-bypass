@@ -2116,14 +2116,15 @@ class MainWindow(QMainWindow):
         terminated_count = 0
         for proc in psutil.process_iter(['name', 'cmdline']):
             try:
+                name = proc.info.get('name') or ""
                 cmd = proc.info.get('cmdline') or []
-                if any('tg_ws_proxy.py' in arg for arg in cmd):
+                if any('tg_ws_proxy.py' in arg for arg in cmd) or 'tgwsproxy_windows.exe' in name.lower():
                     proc.kill()
                     terminated_count += 1
             except Exception:
                 pass
         if terminated_count > 0:
-            self.append_log(f"[Очистка] Завершено {terminated_count} процессов tg_ws_proxy.py.")
+            self.append_log(f"[Очистка] Завершено {terminated_count} процессов Telegram WS Proxy.")
 
     # -----------------------------------------------------------------------------
     # Module 2: Telegram WS Proxy Control
@@ -2131,93 +2132,127 @@ class MainWindow(QMainWindow):
     def toggle_tg_proxy(self, checked):
         if checked:
             tg_dir = os.path.join(self.bin_dir, "tg-proxy")
+            tg_exe = os.path.join(tg_dir, "TgWsProxy_windows.exe")
             tg_ws_proxy_py = os.path.join(tg_dir, "proxy", "tg_ws_proxy.py")
 
-            if not os.path.exists(tg_ws_proxy_py):
-                self.append_log("[Ошибка] Файл tg_ws_proxy.py не найден в папке bin/tg-proxy/proxy/")
-                self.tg_switch.setChecked(False)
-                return
-
-            # Get or generate a persistent secret so the user only has to register the proxy in Telegram once
-            secret_file = os.path.join(self.project_dir, "tg_secret.txt")
+            # Load or generate config from %APPDATA%\TgWsProxy\config.json
+            tg_appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'TgWsProxy')
+            if not os.path.exists(tg_appdata):
+                os.makedirs(tg_appdata)
+            tg_config_path = os.path.join(tg_appdata, "config.json")
+            
             secret = ""
-            if os.path.exists(secret_file):
-                try:
-                    with open(secret_file, "r") as sf:
-                        secret = sf.read().strip()
-                except Exception:
-                    pass
-            if not secret or len(secret) != 32:
-                secret = os.urandom(16).hex()
-                try:
-                    with open(secret_file, "w") as sf:
-                        sf.write(secret)
-                except Exception:
-                    pass
-
             port = 1443
             host = "127.0.0.1"
+            
+            tg_cfg = {}
+            if os.path.exists(tg_config_path):
+                try:
+                    with open(tg_config_path, "r", encoding="utf-8") as f:
+                        tg_cfg = json.load(f)
+                    secret = tg_cfg.get("secret", "")
+                    port = tg_cfg.get("port", 1443)
+                    host = tg_cfg.get("host", "127.0.0.1")
+                except Exception:
+                    pass
+            
+            if not secret or len(secret) != 32:
+                secret = os.urandom(16).hex()
+                tg_cfg["secret"] = secret
+                tg_cfg["port"] = port
+                tg_cfg["host"] = host
+                tg_cfg.setdefault("dc_ip", ["2:149.154.167.220", "4:149.154.167.220"])
+                tg_cfg.setdefault("verbose", False)
+                tg_cfg.setdefault("check_updates", True)
+                tg_cfg.setdefault("log_max_mb", 5)
+                tg_cfg.setdefault("buf_kb", 256)
+                tg_cfg.setdefault("pool_size", 4)
+                tg_cfg.setdefault("cfproxy", True)
+                tg_cfg.setdefault("cfproxy_user_domain", [])
+                tg_cfg.setdefault("cfproxy_worker_domain", [])
+                try:
+                    with open(tg_config_path, "w", encoding="utf-8") as f:
+                        json.dump(tg_cfg, f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
 
-            self.append_log(f"[Запуск] Запуск Telegram WS Proxy на {host}:{port}...")
-            self.append_log(f"[Инфо] Секрет прокси: {secret}")
+            self.append_log(f"[Запуск] Запуск Telegram WS Proxy...")
+            
+            if os.path.exists(tg_exe):
+                # Run the precompiled exe directly (no python dependency, perfect for other users)
+                try:
+                    proc = subprocess.Popen(
+                        [tg_exe],
+                        cwd=tg_dir,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
+                    self.processes["tg-proxy"] = proc
+                    self.append_log("[Успех] Telegram WS Proxy запущен в трее из TgWsProxy_windows.exe.")
+                except Exception as e:
+                    self.append_log(f"[Ошибка] Не удалось запустить TgWsProxy_windows.exe: {str(e)}")
+                    self.tg_switch.setChecked(False)
+                    return
+            else:
+                # Fallback to python script if executable is missing
+                if not os.path.exists(tg_ws_proxy_py):
+                    self.append_log("[Ошибка] Утилита Telegram WS Proxy не найдена.")
+                    self.tg_switch.setChecked(False)
+                    return
 
-            # Resolve python executable to run the proxy script
-            python_exe = sys.executable
-            if getattr(sys, 'frozen', False):
-                # When frozen as an EXE, sys.executable is the compiled binary itself.
-                # We need to find the system's python interpreter to execute the .py script.
-                py_path = shutil.which("py")
-                if py_path:
-                    python_exe = py_path
-                else:
-                    python_path = shutil.which("python")
-                    if python_path and "WindowsApps" not in python_path:
-                        python_exe = python_path
+                python_exe = sys.executable
+                if getattr(sys, 'frozen', False):
+                    py_path = shutil.which("py")
+                    if py_path:
+                        python_exe = py_path
                     else:
-                        python_exe = "py"
+                        python_path = shutil.which("python")
+                        if python_path and "WindowsApps" not in python_path:
+                            python_exe = python_path
+                        else:
+                            python_exe = "py"
 
-            try:
-                # Run the MTProto WebSocket proxy script with CLI arguments
-                proc = subprocess.Popen(
-                    [
-                        python_exe, tg_ws_proxy_py,
-                        "--host", host,
-                        "--port", str(port),
-                        "--secret", secret,
-                        "-v"  # verbose logging for diagnostics
-                    ],
-                    cwd=tg_dir,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1
-                )
-                self.processes["tg-proxy"] = proc
-                self.run_process_reader(proc, "TG-Proxy")
+                try:
+                    proc = subprocess.Popen(
+                        [
+                            python_exe, tg_ws_proxy_py,
+                            "--host", host,
+                            "--port", str(port),
+                            "--secret", secret,
+                            "-v"
+                        ],
+                        cwd=tg_dir,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1
+                    )
+                    self.processes["tg-proxy"] = proc
+                    self.run_process_reader(proc, "TG-Proxy")
+                    self.append_log("[Успех] Telegram WS Proxy запущен из python-скрипта.")
+                except Exception as e:
+                    self.append_log(f"[Ошибка] Не удалось запустить tg_ws_proxy.py: {str(e)}")
+                    self.tg_switch.setChecked(False)
+                    return
 
-                # Format MTProto Proxy link with dd-prefix (obfuscated mode)
-                tg_link = f"tg://proxy?server={host}&port={port}&secret=dd{secret}"
-                self._tg_proxy_link = tg_link
-                self.tg_link_label.setText(f"Ссылка: {tg_link}")
-                self.tg_copy_btn.setVisible(True)
-                self.append_log(f"[Успех] Telegram WS Proxy запущен.")
-                self.append_log(f"[Инфо]   Тип: MTProto | Сервер: {host} | Порт: {port} | Секрет: dd{secret}")
+            # Format and show link in GUI, and trigger auto-open
+            tg_link = f"tg://proxy?server={host}&port={port}&secret=dd{secret}"
+            self._tg_proxy_link = tg_link
+            self.tg_link_label.setText(f"Ссылка: {tg_link}")
+            self.tg_copy_btn.setVisible(True)
+            self.append_log(f"[Инфо]   Тип: MTProto | Сервер: {host} | Порт: {port} | Секрет: dd{secret}")
 
-                # Auto-open the link in Telegram after a short delay
-                def open_tg_link():
-                    try:
-                        os.startfile(tg_link)
-                        self.append_log("[Инфо] Ссылка отправлена в Telegram — подтвердите подключение к прокси в приложении.")
-                    except Exception as ex:
-                        self.append_log(f"[Ошибка] Не удалось открыть Telegram: {str(ex)}")
+            def open_tg_link():
+                try:
+                    os.startfile(tg_link)
+                    self.append_log("[Инфо] Ссылка отправлена в Telegram — подтвердите подключение к прокси в приложении.")
+                except Exception as ex:
+                    self.append_log(f"[Ошибка] Не удалось открыть Telegram: {str(ex)}")
 
-                QTimer.singleShot(1500, open_tg_link)
-            except Exception as e:
-                self.append_log(f"[Ошибка] Не удалось запустить TG WS Proxy: {str(e)}")
-                self.tg_switch.setChecked(False)
+            QTimer.singleShot(1500, open_tg_link)
         else:
             self.stop_process_group("tg-proxy")
+            self.cleanup_tg_proxy()
             self.tg_link_label.setText("Ссылка для Telegram: не запущено")
             self.tg_copy_btn.setVisible(False)
             self._tg_proxy_link = None
