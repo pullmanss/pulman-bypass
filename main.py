@@ -72,7 +72,7 @@ try:
         QLabel, QLineEdit, QPushButton, QComboBox, QPlainTextEdit, 
         QProgressBar, QSizePolicy, QDialog, QAbstractButton, QFrame,
         QGraphicsDropShadowEffect, QScrollArea, QFileDialog, QGridLayout,
-        QGraphicsOpacityEffect
+        QGraphicsOpacityEffect, QListWidget, QListWidgetItem
     )
     from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPropertyAnimation, pyqtProperty, QSize, QEasingCurve, QTimer, QRectF
     from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QIcon, QLinearGradient, QRadialGradient
@@ -1016,6 +1016,140 @@ class AnimatedButton(QPushButton):
         p.end()
 
 # -----------------------------------------------------------------------------
+# Dialog to manage subscriptions
+# -----------------------------------------------------------------------------
+class SubscriptionManagerDialog(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Управление подписками")
+        self.resize(550, 400)
+        self.setModal(True)
+        
+        # Apply the Catppuccin theme formatting or local styling to match main window
+        self.setStyleSheet(self.main_window.styleSheet() + """
+            QListWidget {
+                background-color: rgba(0, 0, 0, 0.45);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 10px;
+                color: #e4e4e7;
+                padding: 5px;
+            }
+            QListWidget::item {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.04);
+                border-radius: 8px;
+                margin: 4px;
+                padding: 4px;
+            }
+        """)
+        
+        # Setup UI
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
+        
+        title = QLabel("Ваши подписки")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff;")
+        layout.addWidget(title)
+        
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        
+        # Add Input field & button
+        add_layout = QHBoxLayout()
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("Вставьте ссылку подписки (https://...)")
+        self.add_btn = AnimatedButton("Добавить")
+        self.add_btn.setFixedWidth(100)
+        self.add_btn.clicked.connect(self.add_subscription)
+        add_layout.addWidget(self.url_input)
+        add_layout.addWidget(self.add_btn)
+        layout.addLayout(add_layout)
+        
+        # Close button
+        close_btn = AnimatedButton("Закрыть")
+        close_btn.setFixedWidth(100)
+        close_btn.clicked.connect(self.accept)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        self.load_items()
+
+    def load_items(self):
+        self.list_widget.clear()
+        for url in self.main_window.subscriptions:
+            item = QListWidgetItem(self.list_widget)
+            
+            # Create a widget for the item containing the URL and a delete button
+            widget = QWidget()
+            widget_layout = QHBoxLayout(widget)
+            widget_layout.setContentsMargins(5, 2, 5, 2)
+            widget_layout.setSpacing(10)
+            
+            lbl = QLabel(url)
+            lbl.setStyleSheet("color: #e4e4e7; font-size: 12px;")
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            
+            del_btn = QPushButton("×")
+            del_btn.setToolTip("Удалить подписку")
+            del_btn.setFixedWidth(24)
+            del_btn.setFixedHeight(24)
+            del_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(243, 139, 168, 0.1);
+                    border: 1px solid rgba(243, 139, 168, 0.2);
+                    border-radius: 6px;
+                    color: #f38ba8;
+                    font-weight: bold;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(243, 139, 168, 0.3);
+                    border-color: #f38ba8;
+                }
+            """)
+            
+            del_btn.clicked.connect(lambda checked, u=url: self.delete_subscription(u))
+            
+            widget_layout.addWidget(lbl, 1)
+            widget_layout.addWidget(del_btn)
+            
+            item.setSizeHint(widget.sizeHint())
+            self.list_widget.setItemWidget(item, widget)
+
+    def add_subscription(self):
+        url = self.url_input.text().strip()
+        if not url:
+            return
+        if not (url.startswith("http://") or url.startswith("https://")):
+            self.url_input.setStyleSheet("border-color: #f38ba8;")
+            QTimer.singleShot(2000, lambda: self.url_input.setStyleSheet(""))
+            return
+        
+        if url not in self.main_window.subscriptions:
+            self.main_window.subscriptions.append(url)
+            self.main_window.save_subscriptions()
+            self.main_window.append_log(f"[Подписки] Добавлена ссылка: {url}")
+            self.load_items()
+            self.url_input.clear()
+            self.main_window.refresh_vless_list_async()
+        else:
+            self.url_input.setText("")
+            self.url_input.setPlaceholderText("Эта ссылка уже добавлена!")
+            QTimer.singleShot(2000, lambda: self.url_input.setPlaceholderText("Вставьте ссылку подписки (https://...)"))
+
+    def delete_subscription(self, url):
+        if url in self.main_window.subscriptions:
+            self.main_window.subscriptions.remove(url)
+            self.main_window.save_subscriptions()
+            self.main_window.append_log(f"[Подписки] Удалена ссылка: {url}")
+            self.load_items()
+            self.main_window.refresh_vless_list_async()
+
+# -----------------------------------------------------------------------------
 # QThread Worker for downloading files
 # -----------------------------------------------------------------------------
 class DownloaderThread(QThread):
@@ -1328,6 +1462,12 @@ class MainWindow(QMainWindow):
         }
         self.vpn_servers = []
         self._tg_proxy_link = None
+        self.subscriptions_path = os.path.join(self.project_dir, "subscriptions.json")
+        if not os.path.exists(self.subscriptions_path):
+            parent_subs = os.path.join(os.path.dirname(self.project_dir), "subscriptions.json")
+            if os.path.exists(parent_subs):
+                self.subscriptions_path = parent_subs
+        self.subscriptions = self.load_subscriptions()
 
         # Setup Signals
         self.log_signal.connect(self.append_log)
@@ -1602,6 +1742,9 @@ class MainWindow(QMainWindow):
         # Row of actions
         actions_layout = QHBoxLayout()
         
+        self.manage_subs_btn = AnimatedButton("Подписки")
+        self.manage_subs_btn.clicked.connect(self.show_subscription_manager)
+        
         self.refresh_btn = AnimatedButton("Обновить список")
         self.refresh_btn.clicked.connect(self.refresh_vless_list_async)
         
@@ -1611,6 +1754,7 @@ class MainWindow(QMainWindow):
         self.remove_offline_btn = AnimatedButton("Удалить нерабочие")
         self.remove_offline_btn.clicked.connect(self.remove_offline_servers)
         
+        actions_layout.addWidget(self.manage_subs_btn)
         actions_layout.addWidget(self.refresh_btn)
         actions_layout.addWidget(self.ping_btn)
         actions_layout.addWidget(self.remove_offline_btn)
@@ -1781,6 +1925,7 @@ class MainWindow(QMainWindow):
         self.remove_offline_btn.setEnabled(not disable)
         self.check_status_btn.setEnabled(not disable)
         self.file_import_btn.setEnabled(not disable)
+        self.manage_subs_btn.setEnabled(not disable)
 
     def load_presets(self):
         # Scan bin/zapret/ directory for bat files
@@ -1817,6 +1962,22 @@ class MainWindow(QMainWindow):
                 json.dump(self.vpn_servers, f, indent=4, ensure_ascii=False)
         except Exception as e:
             self.append_log(f"[Ошибка] Не удалось сохранить vpn_keys.json: {str(e)}")
+
+    def load_subscriptions(self):
+        if os.path.exists(self.subscriptions_path):
+            try:
+                with open(self.subscriptions_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.append_log(f"[Ошибка] Не удалось загрузить subscriptions.json: {str(e)}")
+        return []
+
+    def save_subscriptions(self):
+        try:
+            with open(self.subscriptions_path, "w", encoding="utf-8") as f:
+                json.dump(self.subscriptions, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            self.append_log(f"[Ошибка] Не удалось сохранить subscriptions.json: {str(e)}")
 
     def update_server_combo(self):
         self.server_combo.clear()
@@ -2095,36 +2256,14 @@ class MainWindow(QMainWindow):
 
         # Check if URL subscription link
         if text.startswith("http://") or text.startswith("https://"):
-            self.append_log(f"[Импорт] Запрос подписки по ссылке: {text}...")
-            self.import_btn.setEnabled(False)
+            if text not in self.subscriptions:
+                self.subscriptions.append(text)
+                self.save_subscriptions()
+                self.append_log(f"[Импорт] Добавлена новая подписка: {text}")
+            else:
+                self.append_log(f"[Импорт] Подписка уже существует: {text}")
             
-            def run_import():
-                try:
-                    servers = fetch_subscription(text)
-                    if servers:
-                        for s in servers:
-                            s['is_custom'] = True
-                        self.vpn_servers.extend(servers)
-                        # Remove duplicates based on host, port, type
-                        seen = set()
-                        unique_servers = []
-                        for s in self.vpn_servers:
-                            key = (s['host'], s['port'], s['type'], s['tag'])
-                            if key not in seen:
-                                seen.add(key)
-                                unique_servers.append(s)
-                        self.vpn_servers = unique_servers
-                        self.save_vpn_keys()
-                        self.log_signal.emit(f"[Импорт] Успешно импортировано {len(servers)} серверов из подписки.")
-                        self.import_done_signal.emit(True)
-                    else:
-                        self.log_signal.emit("[Импорт] Серверы не найдены в подписке.")
-                        self.import_done_signal.emit(False)
-                except Exception as e:
-                    self.log_signal.emit(f"[Импорт] Ошибка загрузки подписки: {str(e)}")
-                    self.import_done_signal.emit(False)
-
-            threading.Thread(target=run_import, daemon=True).start()
+            self.refresh_vless_list_async()
             self.key_input.clear()
             return
 
@@ -2221,40 +2360,43 @@ class MainWindow(QMainWindow):
             self.append_log(f"[Ошибка] Неверный JSON формат: {str(e)}")
         except Exception as e:
             self.append_log(f"[Ошибка] Ошибка импорта JSON конфига: {str(e)}")
+    def show_subscription_manager(self):
+        dialog = SubscriptionManagerDialog(self)
+        dialog.exec()
 
     def refresh_vless_list_async(self):
         """Fetch VLESS servers from the remote URLs in a background thread."""
+        if not self.subscriptions:
+            self.append_log("[Импорт] Нет добавленных ссылок подписок. Пожалуйста, добавьте подписку кнопкой 'Подписки'.")
+            self.vpn_status_label.setText("Подписки отсутствуют.")
+            # Clear old non-custom servers to clean up the UI if subscriptions were deleted
+            custom_servers = [s for s in self.vpn_servers if s.get('is_custom', True)]
+            self.vpn_servers = custom_servers
+            self.save_vpn_keys()
+            self.update_server_combo()
+            return
+
         self.refresh_btn.setEnabled(False)
         self.refresh_btn.setText("Обновление...")
         self.vpn_status_label.setText("Загрузка списка серверов...")
         self.append_log("[Импорт] Запуск фонового обновления списка серверов...")
 
         def worker():
-            urls = [
-                'https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt',
-                'https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt'
-            ]
             new_servers = []
             
-            for url in urls:
+            for url in self.subscriptions:
                 self.log_signal.emit(f"[Импорт] Загрузка серверов из подписки: {url}...")
                 try:
-                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'})
-                    with urllib.request.urlopen(req, timeout=15) as r:
-                        data = r.read().decode('utf-8', errors='ignore')
-                    lines = [line.strip() for line in data.splitlines() if line.strip().startswith('vless://')]
-                    
+                    servers = fetch_subscription(url)
                     added_from_url = 0
-                    for line in lines:
-                        try:
-                            srv = parse_vpn_key(line)
-                            if srv:
-                                srv['is_custom'] = False
-                                new_servers.append(srv)
-                                added_from_url += 1
-                        except Exception:
-                            continue
-                    self.log_signal.emit(f"[Импорт] Успешно получено {added_from_url} серверов из {url.split('/')[-1]}.")
+                    if servers:
+                        for srv in servers:
+                            srv['is_custom'] = False
+                            new_servers.append(srv)
+                            added_from_url += 1
+                        self.log_signal.emit(f"[Импорт] Успешно получено {added_from_url} серверов из {url.split('/')[-1]}.")
+                    else:
+                        self.log_signal.emit(f"[Импорт] Серверы не найдены в подписке {url}.")
                 except Exception as e:
                     self.log_signal.emit(f"[Ошибка] Не удалось загрузить подписку {url}: {str(e)}")
 
@@ -2277,6 +2419,10 @@ class MainWindow(QMainWindow):
                 self.import_done_signal.emit(True)
             else:
                 self.log_signal.emit("[Импорт] Не удалось найти новые серверы в подписках.")
+                # Even if no servers found, we still want to keep custom ones and update the list
+                custom_servers = [s for s in self.vpn_servers if s.get('is_custom', True)]
+                self.vpn_servers = custom_servers
+                self.save_vpn_keys()
                 self.import_done_signal.emit(False)
 
         threading.Thread(target=worker, daemon=True).start()
